@@ -14,8 +14,12 @@ enum class MpvOptionType {
     Choice,
     Integer,
     Number,
+    Float,
     String,
+    Text,
+    Path,
     StringList,
+    List,
 }
 
 enum class AndroidSupport {

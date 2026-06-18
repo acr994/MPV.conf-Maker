@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,10 +18,13 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -31,12 +35,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.acr.mpvconfmaker.data.mpv.AndroidSupport
 import com.acr.mpvconfmaker.data.mpv.MpvOption
 import com.acr.mpvconfmaker.data.mpv.MpvOptionCatalog
+import com.acr.mpvconfmaker.data.mpv.MpvOptionType
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +70,7 @@ private fun MpvConfMakerApp() {
 private fun HomeScreen() {
     var query by rememberSaveable { mutableStateOf("") }
     val selectedSupports = remember { mutableStateMapOf<AndroidSupport, Boolean>() }
+    var editedValues by rememberSaveable { mutableStateOf(emptyMap<String, String>()) }
     val expandedSections = remember {
         mutableStateMapOf<String, Boolean>().apply {
             optionSections.forEach { section -> put(section.title, true) }
@@ -119,6 +127,9 @@ private fun HomeScreen() {
                 options = sectionOptions,
                 expanded = expandedSections[section.title] ?: true,
                 onToggle = { expandedSections[section.title] = !(expandedSections[section.title] ?: true) },
+                valueFor = { option -> editedValues[option.key] ?: option.defaultValue.orEmpty() },
+                onValueChange = { option, value -> editedValues = editedValues + (option.key to value) },
+                onReset = { option -> editedValues = editedValues - option.key },
             )
         }
     }
@@ -147,6 +158,9 @@ private fun OptionSectionCard(
     options: List<MpvOption>,
     expanded: Boolean,
     onToggle: () -> Unit,
+    valueFor: (MpvOption) -> String,
+    onValueChange: (MpvOption, String) -> Unit,
+    onReset: (MpvOption) -> Unit,
 ) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(modifier = Modifier.padding(12.dp)) {
@@ -164,7 +178,14 @@ private fun OptionSectionCard(
                     )
                 } else {
                     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        options.forEach { option -> OptionItem(option = option) }
+                        options.forEach { option ->
+                            OptionItem(
+                                option = option,
+                                value = valueFor(option),
+                                onValueChange = { value -> onValueChange(option, value) },
+                                onReset = { onReset(option) },
+                            )
+                        }
                     }
                 }
             }
@@ -173,14 +194,84 @@ private fun OptionSectionCard(
 }
 
 @Composable
-private fun OptionItem(option: MpvOption) {
+private fun OptionItem(
+    option: MpvOption,
+    value: String,
+    onValueChange: (String) -> Unit,
+    onReset: () -> Unit,
+) {
     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = option.key, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
             Text(text = option.shortDescription, style = MaterialTheme.typography.bodyMedium)
             Text(text = "Default: ${option.defaultValue ?: "no documentado"}", style = MaterialTheme.typography.bodySmall)
             Text(text = "Android: ${option.androidSupport.name}", style = MaterialTheme.typography.bodySmall)
             Text(text = "Riesgo: ${option.riskLevel.name}", style = MaterialTheme.typography.bodySmall)
+            OptionValueEditor(option = option, value = value, onValueChange = onValueChange)
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = "Valor actual: ${value.ifBlank { "sin valor" }}", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = onReset) { Text("Reset") }
+            }
+        }
+    }
+}
+
+@Composable
+private fun OptionValueEditor(
+    option: MpvOption,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    when (option.type) {
+        MpvOptionType.Boolean -> {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(text = "Activado", style = MaterialTheme.typography.bodyMedium)
+                Switch(
+                    checked = value.equals("yes", ignoreCase = true) || value.equals("true", ignoreCase = true),
+                    onCheckedChange = { checked -> onValueChange(if (checked) "yes" else "no") },
+                )
+            }
+        }
+        MpvOptionType.Choice -> ChoiceEditor(option = option, value = value, onValueChange = onValueChange)
+        MpvOptionType.Integer, MpvOptionType.Number, MpvOptionType.Float -> OutlinedTextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            label = { Text("Valor numérico") },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        )
+        MpvOptionType.String, MpvOptionType.Text, MpvOptionType.Path, MpvOptionType.StringList, MpvOptionType.List -> OutlinedTextField(
+            modifier = Modifier.fillMaxWidth(),
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            label = { Text("Valor") },
+        )
+    }
+}
+
+@Composable
+private fun ChoiceEditor(
+    option: MpvOption,
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    Box {
+        TextButton(onClick = { expanded = true }) {
+            Text(text = value.ifBlank { "Seleccionar valor" })
+        }
+        DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            option.choices.forEach { choice ->
+                DropdownMenuItem(
+                    text = { Text(choice) },
+                    onClick = {
+                        onValueChange(choice)
+                        expanded = false
+                    },
+                )
+            }
         }
     }
 }
