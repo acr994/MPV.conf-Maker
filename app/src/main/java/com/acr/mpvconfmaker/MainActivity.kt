@@ -100,6 +100,7 @@ private fun HomeScreen() {
     }
     val clipboardManager = LocalClipboardManager.current
     val previewText = remember(editedValues) { buildMpvConfPreview(editedValues) }
+    val compatibilityWarnings = remember(editedValues) { validateMpvCompatibility(editedValues) }
     LaunchedEffect(context) {
         context.observeSavedMpvOptionValues().collect { savedValues -> editedValues = savedValues }
     }
@@ -150,6 +151,7 @@ private fun HomeScreen() {
         item {
             PreviewPanel(
                 previewText = previewText,
+                compatibilityWarnings = compatibilityWarnings,
                 onCopy = { clipboardManager.setText(AnnotatedString(previewText)) },
                 onClearChanges = {
                     editedValues = emptyMap()
@@ -187,6 +189,7 @@ private fun HomeScreen() {
 @Composable
 private fun PreviewPanel(
     previewText: String,
+    compatibilityWarnings: List<String>,
     onCopy: () -> Unit,
     onClearChanges: () -> Unit,
     onResetAll: () -> Unit,
@@ -198,6 +201,18 @@ private fun PreviewPanel(
                 text = previewText.ifBlank { "Sin opciones modificadas." },
                 style = MaterialTheme.typography.bodyMedium,
             )
+            if (compatibilityWarnings.isNotEmpty()) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = "Advertencias de compatibilidad",
+                        style = MaterialTheme.typography.titleSmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    compatibilityWarnings.forEach { warning ->
+                        Text(text = "⚠️ $warning", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Button(onClick = onCopy, enabled = previewText.isNotBlank()) { Text("Copiar mpv.conf") }
                 TextButton(onClick = onClearChanges) { Text("Limpiar cambios") }
@@ -425,6 +440,67 @@ private suspend fun Context.saveMpvOptionValues(values: Map<String, String>) {
 
 private val MpvOption.preferenceKey: Preferences.Key<String>
     get() = stringPreferencesKey("mpv_option_$key")
+
+private fun validateMpvCompatibility(editedValues: Map<String, String>): List<String> {
+    val activeValues = editedValues.mapValues { (_, value) -> value.trim() }.filterValues { it.isNotEmpty() }
+    if (activeValues.isEmpty()) return emptyList()
+
+    val warnings = mutableListOf<String>()
+    val hwdec = activeValues["hwdec"].orEmpty()
+    val vo = activeValues["vo"].orEmpty()
+    val interpolation = activeValues["interpolation"].orEmpty()
+    val videoSync = activeValues["video-sync"].orEmpty()
+
+    if (hwdec == "mediacodec" && activeValues.keys.any { it in hardwareDecodeSensitiveOptions }) {
+        warnings += "hwdec=mediacodec puede limitar filtros/renderizado avanzado; revisa debanding, interpolación o desentrelazado en el dispositivo."
+    }
+    if (interpolation.equals("yes", ignoreCase = true) && videoSync !in interpolationFriendlyVideoSyncModes) {
+        warnings += "interpolation=yes suele requerir video-sync=display-resample o display-resample-vdrop para funcionar correctamente."
+    }
+    if (vo == "mediacodec_embed") {
+        warnings += "vo=mediacodec_embed puede no exponer funciones del renderizador GPU usadas por escalado, debanding o subtítulos avanzados."
+    }
+    listOf("demuxer-max-bytes", "demuxer-max-back-bytes").forEach { key ->
+        val bytes = activeValues[key]?.toByteSizeOrNull()
+        if (bytes != null && bytes > androidCacheWarningBytes) {
+            warnings += "$key=${activeValues[key]} puede consumir demasiada memoria en Android."
+        }
+    }
+    activeValues.keys.mapNotNull(MpvOptionCatalog::findByKey).forEach { option ->
+        if (option.androidSupport == AndroidSupport.DesktopOnly) {
+            warnings += "${option.key} está marcada como DesktopOnly y puede no funcionar en Android."
+        }
+    }
+    return warnings
+}
+
+private val hardwareDecodeSensitiveOptions = setOf(
+    "deband",
+    "deband-iterations",
+    "deband-threshold",
+    "deinterlace",
+    "interpolation",
+    "scale",
+    "dscale",
+    "tscale",
+)
+
+private val interpolationFriendlyVideoSyncModes = setOf("display-resample", "display-resample-vdrop")
+private const val androidCacheWarningBytes = 256L * 1024L * 1024L
+
+private fun String.toByteSizeOrNull(): Long? {
+    val normalized = trim().lowercase()
+    val number = normalized.takeWhile { it.isDigit() || it == '.' }.toDoubleOrNull() ?: return null
+    val suffix = normalized.dropWhile { it.isDigit() || it == '.' }
+    val multiplier = when (suffix) {
+        "", "b" -> 1.0
+        "k", "kb", "kib" -> 1024.0
+        "m", "mb", "mib" -> 1024.0 * 1024.0
+        "g", "gb", "gib" -> 1024.0 * 1024.0 * 1024.0
+        else -> return null
+    }
+    return (number * multiplier).toLong()
+}
 
 @Preview(showBackground = true)
 @Composable
