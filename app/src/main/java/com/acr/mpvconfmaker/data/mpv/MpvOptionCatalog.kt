@@ -2,8 +2,18 @@ package com.acr.mpvconfmaker.data.mpv
 
 object MpvOptionCatalog {
     private const val MPV_MANUAL = "https://mpv.io/manual/stable/"
+    private const val MPV_OPTIONS_RST = "https://github.com/mpv-player/mpv/blob/master/DOCS/man/options.rst"
+    private const val MPV_REPOSITORY = "https://github.com/mpv-player/mpv"
+    private const val MPV_ANDROID_REPOSITORY = "https://github.com/mpv-android/mpv-android"
     private const val MPV_ANDROID_PREFS = "https://github.com/mpv-android/mpv-android/tree/master/app/src/main/res/xml"
     private const val MPV_ANDROID_VIEW = "https://github.com/mpv-android/mpv-android/blob/master/app/src/main/java/is/xyz/mpv/BaseMPVView.kt"
+
+    val sourceReferences: List<String> = listOf(
+        MPV_MANUAL,
+        MPV_REPOSITORY,
+        MPV_OPTIONS_RST,
+        MPV_ANDROID_REPOSITORY,
+    )
 
     val androidRelevantOptions: List<MpvOption> = listOf(
         o("hwdec", MpvOptionSection.Video, MpvOptionType.Choice, "no", listOf("no", "auto", "auto-safe", "mediacodec", "mediacodec-copy"), "Decodificación de video por hardware.", "mpv documenta esta opción para seleccionar APIs de decodificación por hardware; en Android son relevantes los modos MediaCodec cuando están disponibles.", AndroidSupport.RecommendedAndroid, "Útil para ahorrar batería y reducir carga de CPU, pero puede variar según codec, dispositivo y driver.", RiskLevel.Medium, "hwdec=auto-safe", listOf("auto-safe", "mediacodec-copy"), MPV_MANUAL),
@@ -51,6 +61,14 @@ object MpvOptionCatalog {
     val optionsByAndroidSupport: Map<AndroidSupport, List<MpvOption>> =
         androidRelevantOptions.groupBy { it.androidSupport }
 
+    val catalogValidationIssues: List<String> = validateCatalog(androidRelevantOptions)
+
+    init {
+        require(catalogValidationIssues.isEmpty()) {
+            "Catálogo MPV inválido: ${catalogValidationIssues.joinToString()}"
+        }
+    }
+
     fun findByKey(key: String): MpvOption? = androidRelevantOptions.firstOrNull { it.key == key }
 
     private fun o(
@@ -67,12 +85,19 @@ object MpvOptionCatalog {
         example: String,
         recommendedValues: List<String>,
         sourceUrl: String,
+        minValue: Double? = null,
+        maxValue: Double? = null,
+        unit: String? = null,
+        tags: List<String> = defaultTagsFor(section, androidSupport),
     ) = MpvOption(
         key = key,
         section = section,
         type = type,
         defaultValue = defaultValue,
         choices = choices,
+        minValue = minValue,
+        maxValue = maxValue,
+        unit = unit,
         shortDescription = shortDescription,
         longDescription = longDescription,
         androidSupport = androidSupport,
@@ -80,7 +105,30 @@ object MpvOptionCatalog {
         riskLevel = riskLevel,
         sourceUrl = sourceUrl,
         sourceAnchor = "--$key",
+        tags = tags,
         example = example,
         recommendedValues = recommendedValues,
+    )
+
+    private fun validateCatalog(options: List<MpvOption>): List<String> {
+        val duplicateIssues = options
+            .groupBy { it.key }
+            .filterValues { entries -> entries.size > 1 }
+            .keys
+            .map { key -> "key duplicada: $key" }
+        val metadataIssues = options.flatMap { option ->
+            buildList {
+                if (option.section.name.isBlank()) add("${option.key}: sin sección")
+                if (option.shortDescription.isBlank() || option.longDescription.isBlank()) add("${option.key}: sin descripción")
+                if (option.example.isBlank()) add("${option.key}: sin example")
+                if (option.sourceUrl.isBlank()) add("${option.key}: sin sourceUrl")
+            }
+        }
+        return duplicateIssues + metadataIssues
+    }
+
+    private fun defaultTagsFor(section: MpvOptionSection, androidSupport: AndroidSupport): List<String> = listOf(
+        section.name,
+        androidSupport.name,
     )
 }

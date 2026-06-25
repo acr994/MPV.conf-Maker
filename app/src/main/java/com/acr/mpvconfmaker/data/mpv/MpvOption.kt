@@ -25,15 +25,18 @@ enum class MpvOptionType {
 enum class AndroidSupport {
     OfficialMpv,
     RecommendedAndroid,
+    CompatibleAndroid,
     CompatibleAdvanced,
     NotRecommendedAndroid,
     DesktopOnly,
+    UnknownAndroid,
 }
 
 enum class RiskLevel {
     Low,
     Medium,
     High,
+    Experimental,
 }
 
 data class MpvOption(
@@ -42,6 +45,9 @@ data class MpvOption(
     val type: MpvOptionType,
     val defaultValue: String?,
     val choices: List<String>,
+    val minValue: Double?,
+    val maxValue: Double?,
+    val unit: String?,
     val shortDescription: String,
     val longDescription: String,
     val androidSupport: AndroidSupport,
@@ -49,6 +55,7 @@ data class MpvOption(
     val riskLevel: RiskLevel,
     val sourceUrl: String,
     val sourceAnchor: String,
+    val tags: List<String>,
     val example: String,
     val recommendedValues: List<String>,
 )
