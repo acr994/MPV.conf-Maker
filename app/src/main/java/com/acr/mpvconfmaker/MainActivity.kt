@@ -1,3 +1,5 @@
+@file:Suppress("DEPRECATION")
+
 package com.acr.mpvconfmaker
 
 import android.os.Bundle
@@ -16,6 +18,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
@@ -35,6 +38,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.text.KeyboardOptions
@@ -76,6 +81,8 @@ private fun HomeScreen() {
             optionSections.forEach { section -> put(section.title, true) }
         }
     }
+    val clipboardManager = LocalClipboardManager.current
+    val previewText = remember(editedValues) { buildMpvConfPreview(editedValues) }
     val activeSupports = selectedSupports.filterValues { it }.keys
     val filteredOptions = remember(query, selectedSupports.toMap()) {
         MpvOptionCatalog.androidRelevantOptions.filter { option ->
@@ -120,6 +127,14 @@ private fun HomeScreen() {
                 onToggle = { support -> selectedSupports[support] = !(selectedSupports[support] ?: false) },
             )
         }
+        item {
+            PreviewPanel(
+                previewText = previewText,
+                onCopy = { clipboardManager.setText(AnnotatedString(previewText)) },
+                onClearChanges = { editedValues = editedValues.keys.associateWith { "" } },
+                onResetAll = { editedValues = emptyMap() },
+            )
+        }
         items(optionSections, key = { it.title }) { section ->
             val sectionOptions = filteredOptions.filter { it.key in section.optionKeys }
             OptionSectionCard(
@@ -131,6 +146,29 @@ private fun HomeScreen() {
                 onValueChange = { option, value -> editedValues = editedValues + (option.key to value) },
                 onReset = { option -> editedValues = editedValues - option.key },
             )
+        }
+    }
+}
+
+@Composable
+private fun PreviewPanel(
+    previewText: String,
+    onCopy: () -> Unit,
+    onClearChanges: () -> Unit,
+    onResetAll: () -> Unit,
+) {
+    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = "Preview", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.SemiBold)
+            Text(
+                text = previewText.ifBlank { "Sin opciones modificadas." },
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onCopy, enabled = previewText.isNotBlank()) { Text("Copiar mpv.conf") }
+                TextButton(onClick = onClearChanges) { Text("Limpiar cambios") }
+                TextButton(onClick = onResetAll) { Text("Reset todo") }
+            }
         }
     }
 }
@@ -299,6 +337,19 @@ private val optionSections = listOf(
     UiOptionSection("Subtitles", setOf("sub-auto", "slang", "sid", "sub-delay", "sub-scale", "sub-font-size", "sub-color", "sub-border-color", "sub-border-size", "sub-shadow-offset", "sub-ass-override", "sub-ass-style-overrides")),
     UiOptionSection("Advanced", setOf("profile", "speed", "loop-file", "save-position-on-quit")),
 )
+
+private fun buildMpvConfPreview(editedValues: Map<String, String>): String = editedValues
+    .mapValues { (_, value) -> value.trim() }
+    .filterValues { value -> value.isNotEmpty() }
+    .toSortedMap()
+    .entries
+    .joinToString(separator = "\n") { (key, value) -> "$key=${value.toMpvConfBooleanValue()}" }
+
+private fun String.toMpvConfBooleanValue(): String = when {
+    equals("true", ignoreCase = true) -> "yes"
+    equals("false", ignoreCase = true) -> "no"
+    else -> this
+}
 
 @Preview(showBackground = true)
 @Composable
