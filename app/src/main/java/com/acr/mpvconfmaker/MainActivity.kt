@@ -2,9 +2,15 @@
 
 package com.acr.mpvconfmaker
 
+import android.content.Context
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.emptyPreferences
+import androidx.datastore.preferences.core.stringPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,14 +37,17 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.font.FontWeight
@@ -49,6 +58,12 @@ import com.acr.mpvconfmaker.data.mpv.AndroidSupport
 import com.acr.mpvconfmaker.data.mpv.MpvOption
 import com.acr.mpvconfmaker.data.mpv.MpvOptionCatalog
 import com.acr.mpvconfmaker.data.mpv.MpvOptionType
+import java.io.IOException
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.launch
+
+private val Context.mpvConfigDataStore by preferencesDataStore(name = "mpv_config_values")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -76,6 +91,8 @@ private fun HomeScreen() {
     var query by rememberSaveable { mutableStateOf("") }
     val selectedSupports = remember { mutableStateMapOf<AndroidSupport, Boolean>() }
     var editedValues by rememberSaveable { mutableStateOf(emptyMap<String, String>()) }
+    val context = LocalContext.current
+    val persistenceScope = rememberCoroutineScope()
     val expandedSections = remember {
         mutableStateMapOf<String, Boolean>().apply {
             optionSections.forEach { section -> put(section.title, true) }
@@ -83,6 +100,9 @@ private fun HomeScreen() {
     }
     val clipboardManager = LocalClipboardManager.current
     val previewText = remember(editedValues) { buildMpvConfPreview(editedValues) }
+    LaunchedEffect(context) {
+        context.observeSavedMpvOptionValues().collect { savedValues -> editedValues = savedValues }
+    }
     val activeSupports = selectedSupports.filterValues { it }.keys
     val filteredOptions = remember(query, selectedSupports.toMap()) {
         MpvOptionCatalog.androidRelevantOptions.filter { option ->
@@ -131,8 +151,14 @@ private fun HomeScreen() {
             PreviewPanel(
                 previewText = previewText,
                 onCopy = { clipboardManager.setText(AnnotatedString(previewText)) },
-                onClearChanges = { editedValues = editedValues.keys.associateWith { "" } },
-                onResetAll = { editedValues = emptyMap() },
+                onClearChanges = {
+                    editedValues = emptyMap()
+                    persistenceScope.launch { context.saveMpvOptionValues(emptyMap()) }
+                },
+                onResetAll = {
+                    editedValues = emptyMap()
+                    persistenceScope.launch { context.saveMpvOptionValues(emptyMap()) }
+                },
             )
         }
         items(optionSections, key = { it.title }) { section ->
@@ -143,8 +169,16 @@ private fun HomeScreen() {
                 expanded = expandedSections[section.title] ?: true,
                 onToggle = { expandedSections[section.title] = !(expandedSections[section.title] ?: true) },
                 valueFor = { option -> editedValues[option.key] ?: option.defaultValue.orEmpty() },
-                onValueChange = { option, value -> editedValues = editedValues + (option.key to value) },
-                onReset = { option -> editedValues = editedValues - option.key },
+                onValueChange = { option, value ->
+                    val nextValues = editedValues.withPersistableValue(option, value)
+                    editedValues = nextValues
+                    persistenceScope.launch { context.saveMpvOptionValues(nextValues) }
+                },
+                onReset = { option ->
+                    val nextValues = editedValues - option.key
+                    editedValues = nextValues
+                    persistenceScope.launch { context.saveMpvOptionValues(nextValues) }
+                },
             )
         }
     }
@@ -350,6 +384,47 @@ private fun String.toMpvConfBooleanValue(): String = when {
     equals("false", ignoreCase = true) -> "no"
     else -> this
 }
+
+private fun Map<String, String>.withPersistableValue(option: MpvOption, value: String): Map<String, String> {
+    val normalizedValue = value.trim()
+    val defaultValue = option.defaultValue.orEmpty().trim()
+    return if (normalizedValue.isEmpty() || normalizedValue == defaultValue) {
+        this - option.key
+    } else {
+        this + (option.key to value)
+    }
+}
+
+private fun Context.observeSavedMpvOptionValues() = mpvConfigDataStore.data
+    .catch { exception ->
+        if (exception is IOException) {
+            emit(emptyPreferences())
+        } else {
+            throw exception
+        }
+    }
+    .map { preferences ->
+        MpvOptionCatalog.androidRelevantOptions.mapNotNull { option ->
+            val value = preferences[option.preferenceKey]?.takeIf { it.isNotBlank() }
+            value?.let { option.key to it }
+        }.toMap()
+    }
+
+private suspend fun Context.saveMpvOptionValues(values: Map<String, String>) {
+    mpvConfigDataStore.edit { preferences ->
+        MpvOptionCatalog.androidRelevantOptions.forEach { option -> preferences.remove(option.preferenceKey) }
+        MpvOptionCatalog.androidRelevantOptions.forEach { option ->
+            val value = values[option.key]?.trim().orEmpty()
+            val defaultValue = option.defaultValue.orEmpty().trim()
+            if (value.isNotEmpty() && value != defaultValue) {
+                preferences[option.preferenceKey] = value
+            }
+        }
+    }
+}
+
+private val MpvOption.preferenceKey: Preferences.Key<String>
+    get() = stringPreferencesKey("mpv_option_$key")
 
 @Preview(showBackground = true)
 @Composable
